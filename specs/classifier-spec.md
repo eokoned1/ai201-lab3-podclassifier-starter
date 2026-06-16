@@ -91,10 +91,21 @@ the format below:" followed by the output format you chose.
 **What output format should you request from the LLM?**
 
 ```
-[blank — you need to parse the response in classify_episode(). What format
-makes parsing reliable? Think about: a single label on its own line?
-A structured format like "Label: X / Reasoning: Y"? JSON?
-What are the tradeoffs?]
+A two-line, key-prefixed plain-text format:
+
+    Label: <one of: interview, solo, panel, narrative>
+    Reasoning: <one or two sentences>
+
+Why this format:
+- Reliable to parse with simple string ops: split into lines, find the line
+  starting with "Label:" / "Reasoning:", take the text after the colon.
+- Resilient: even if the model adds a preamble or markdown, scanning for the
+  "label:" prefix still finds the answer. A bare single-word answer would be
+  fragile if the model adds any commentary.
+- I considered JSON, but small instruct models occasionally emit invalid JSON
+  (trailing commas, code fences), and json.loads() then throws — more failure
+  modes than a forgiving prefix scan. The key:value form gives most of the
+  structure with far less brittleness.
 ```
 
 ---
@@ -102,8 +113,15 @@ What are the tradeoffs?]
 **Edge cases to handle in the prompt:**
 
 ```
-[blank — what if labeled_examples is empty? What if the description is very
-short? How does your prompt handle these?]
+- Empty labeled_examples: build_few_shot_prompt still produces a valid,
+  zero-shot prompt — the taxonomy in the task instruction is enough for the
+  model to classify. (In practice app.py/evaluate guard against this and warn
+  the user to finish Milestone 1, but the prompt itself does not crash.)
+- Very short / vague description: the prompt still asks for exactly one label;
+  the model picks the closest format. The reasoning will note the uncertainty.
+- The instruction pins the output to EXACTLY one of the four lowercase labels
+  and tells the model to copy the label string verbatim, reducing the chance
+  of synonyms ("monologue", "roundtable") that would fail validation.
 ```
 
 ---
@@ -159,9 +177,13 @@ Extract the response text from:
 **Step 3 — Parse the response:**
 
 ```
-[blank — how do you extract the label and reasoning from the LLM's text output?
-What string operations or parsing logic do you need?
-This depends on the output format you chose in build_few_shot_prompt.]
+Split the response text into lines. Scan for the first line whose lowercased,
+stripped form starts with "label:" and take everything after the colon as the
+raw label (strip whitespace, punctuation, and surrounding markdown/quotes,
+then lowercase). Do the same for "reasoning:" to get the reasoning text.
+
+If no "reasoning:" line is found, fall back to using the whole response (minus
+the label line) as the reasoning so the user still sees the model's thinking.
 ```
 
 ---
@@ -169,8 +191,11 @@ This depends on the output format you chose in build_few_shot_prompt.]
 **Step 4 — Validate the label:**
 
 ```
-[blank — what do you do if the LLM returns a label that isn't in VALID_LABELS?
-What should label be set to?]
+Check the parsed label against VALID_LABELS (exact, lowercase match). If it is
+one of the four, keep it. If it is anything else — a synonym, an empty string,
+or a label we never asked for — set label to "unknown". app.py already knows
+how to render "unknown", and "unknown" never matches a ground-truth label so
+it is correctly counted as wrong during evaluation.
 ```
 
 ---
@@ -178,9 +203,14 @@ What should label be set to?]
 **Step 5 — Handle errors gracefully:**
 
 ```
-[blank — what could go wrong? (Network error? Unparseable response?)
-What should the function return if something fails?
-Hint: the evaluation loop runs 20 calls — one bad response shouldn't crash everything.]
+Wrap the API call + parsing in try/except. Failures that can happen:
+  - Network / API error, rate limit, or timeout from Groq.
+  - Empty or None content in the response.
+  - A response with no recognizable "Label:" line.
+
+On any exception, return {"label": "unknown", "reasoning": "<short error note>"}
+instead of raising. This keeps the 20-call evaluation loop alive — one bad
+response degrades to a single wrong prediction rather than crashing the run.
 ```
 
 ---
@@ -213,24 +243,45 @@ any labels you're unsure about. Annotation quality is part of the lab.
 **Test: what does the raw LLM response look like for one episode?**
 
 ```
-Episode tested: [title]
-Raw response text: [paste it here]
+Episode tested: Marine Biologist Dr. Amara Diallo on What Coral Bleaching Actually Looks Like (e001)
+Raw response text:
+Label: interview
+Reasoning: The episode features a host conversing with a single guest, Dr. Amara
+Diallo, in a clear host-asks/guest-answers dynamic, which is characteristic of an
+interview format. The description highlights the guest's expertise and the topics
+they discuss, further supporting the classification as an interview.
+
+The model stuck to my two-line "Label: / Reasoning:" format exactly, with no
+preamble or markdown fences around it.
 ```
 
 **How did you parse the label out of the response?**
 
 ```
-[describe the string operations — strip, split, lower, etc.]
+I split the response into lines and looked for the first line that starts with
+"label:" (after lowercasing and stripping leading markdown like ** or - so a
+bolded "**Label:**" still matches). I take everything after the colon, strip the
+surrounding whitespace/quotes/punctuation, and lowercase it. I do the same scan
+for a "reasoning:" line; if there isn't one I fall back to using the rest of the
+response as the reasoning so the user still sees something. After parsing I check
+the label against VALID_LABELS and force anything else to "unknown".
 ```
 
 **Did any episodes return `"unknown"`? If so, why?**
 
 ```
-[yes / no — if yes, what did the raw response look like?]
+No. All 20 test episodes parsed to one of the four valid labels (I got 20/20),
+so nothing fell through to "unknown". I still kept the validation + try/except in
+place so a flaky API call or an off-format response degrades to a single wrong
+prediction instead of crashing the whole evaluation loop.
 ```
 
 **One thing about the output format that surprised you:**
 
 ```
-[your answer here]
+I expected to fight with the formatting more than I did. With temperature=0 and a
+firm "respond in EXACTLY this format" instruction, llama-3.3-70b returned the same
+clean two-line shape every single time, which made the parsing far simpler than I
+planned for. It convinced me that a forgiving key:value format plus a strict
+prompt is more reliable here than asking for JSON.
 ```

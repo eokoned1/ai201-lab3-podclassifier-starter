@@ -55,7 +55,69 @@ def build_few_shot_prompt(labeled_examples: list[dict], description: str) -> str
 
     Before writing code, complete specs/classifier-spec.md.
     """
-    return ""
+    instructions = (
+        "You are classifying podcast episodes by their structural format "
+        "(not their topic). Classify the episode into EXACTLY ONE of these four labels:\n\n"
+        "- interview: a host draws out one or more guests; a clear host-asks / guest-answers dynamic.\n"
+        "- solo: a single host speaking alone from memory, experience, or opinion — no guests, "
+        "no assembled external sources.\n"
+        "- panel: three or more speakers of roughly equal standing discussing or debating a shared "
+        "topic; nobody is the single subject.\n"
+        "- narrative: a story assembled from external sources (reporting, documents, archives, "
+        "interview clips) with a clear story arc.\n\n"
+        "Below are labeled examples. Learn the pattern, then classify the final episode.\n"
+    )
+
+    example_blocks = []
+    for ex in labeled_examples:
+        example_blocks.append(
+            f"Title: {ex.get('title', '').strip()}\n"
+            f"Description: {ex.get('description', '').strip()}\n"
+            f"Label: {ex['label']}"
+        )
+    examples_section = "\n\n---\n\n".join(example_blocks)
+    if examples_section:
+        examples_section = (
+            "### Labeled examples\n\n" + examples_section + "\n\n---\n\n"
+        )
+
+    target_section = (
+        "### Episode to classify\n\n"
+        f"Description: {description.strip()}\n\n"
+        "Classify the episode above. Respond in EXACTLY this format and nothing else:\n\n"
+        "Label: <one of: interview, solo, panel, narrative>\n"
+        "Reasoning: <one or two sentences explaining the choice>"
+    )
+
+    return f"{instructions}\n{examples_section}{target_section}"
+
+
+def _parse_response(text: str) -> dict:
+    """Extract a (lowercased) label and reasoning from the LLM's text response."""
+    label = None
+    reasoning = None
+    leftover = []
+
+    for line in text.splitlines():
+        # Strip surrounding whitespace and leading markdown noise (e.g. "**", "- ")
+        # so "**Label:**", "- Label:", "Label:" all match.
+        stripped = line.strip()
+        bare = stripped.lstrip("*#->` ").strip()
+        low = bare.lower()
+        if label is None and low.startswith("label:"):
+            label = bare.split(":", 1)[1]
+            # Clean surrounding whitespace, markdown, quotes, and punctuation.
+            label = label.strip(" \t*`\"'.,").lower()
+        elif reasoning is None and low.startswith("reasoning:"):
+            reasoning = bare.split(":", 1)[1].strip().strip("*`").strip()
+        else:
+            leftover.append(stripped)
+
+    if not reasoning:
+        # Fall back to whatever else the model said.
+        reasoning = " ".join(l for l in leftover if l).strip() or "No reasoning provided."
+
+    return {"label": label, "reasoning": reasoning}
 
 
 def classify_episode(description: str, labeled_examples: list[dict]) -> dict:
@@ -76,7 +138,36 @@ def classify_episode(description: str, labeled_examples: list[dict]) -> dict:
 
     Before writing code, complete specs/classifier-spec.md.
     """
-    return {
-        "label": None,
-        "reasoning": "Classifier not yet implemented. Complete Milestone 2.",
-    }
+    prompt = build_few_shot_prompt(labeled_examples, description)
+
+    try:
+        response = _client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a careful podcast-format classifier. You answer with "
+                        "exactly one of the four valid labels and a brief reason."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0,
+            max_tokens=200,
+        )
+        text = response.choices[0].message.content or ""
+    except Exception as exc:  # network error, rate limit, etc.
+        return {"label": "unknown", "reasoning": f"Classification failed: {exc}"}
+
+    parsed = _parse_response(text)
+    label = parsed["label"]
+
+    # Validate: anything not in VALID_LABELS becomes "unknown".
+    if label not in VALID_LABELS:
+        return {
+            "label": "unknown",
+            "reasoning": parsed["reasoning"] or f"Unrecognized label in response: {text[:120]!r}",
+        }
+
+    return {"label": label, "reasoning": parsed["reasoning"]}
