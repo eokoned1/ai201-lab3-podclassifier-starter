@@ -44,8 +44,10 @@ Returns the fraction of predictions that exactly match the ground truth.
 **Formula:**
 
 ```
-[blank — write out the accuracy formula in plain English.
- What counts as "correct"? What do you divide by?]
+accuracy = (number of positions where prediction == ground_truth) / (total positions)
+
+A prediction is "correct" when it EXACTLY matches the ground-truth label at the
+same index. We divide by the total number of predictions (= number of episodes).
 ```
 
 ---
@@ -53,10 +55,10 @@ Returns the fraction of predictions that exactly match the ground truth.
 **Step-by-step logic:**
 
 ```
-[blank — describe the steps your code will take.
- 1. ...
- 2. ...
- 3. ...]
+1. If there are no predictions (empty list), return 0.0 (avoid divide-by-zero).
+2. Count the positions where predictions[i] == ground_truth[i].
+3. Divide that count by len(predictions).
+4. Return the result as a float between 0.0 and 1.0.
 ```
 
 ---
@@ -64,7 +66,8 @@ Returns the fraction of predictions that exactly match the ground truth.
 **Edge case — what if both lists are empty?**
 
 ```
-[blank — what should the function return? Why?]
+Return 0.0. There is nothing to score, and dividing by zero is undefined — 0.0
+is a safe, meaningful "no correct predictions" value that won't crash the report.
 ```
 
 ---
@@ -75,7 +78,13 @@ Returns the fraction of predictions that exactly match the ground truth.
 predictions  = ["interview", "solo", "panel", "interview"]
 ground_truth = ["interview", "solo", "solo",  "narrative"]
 
-[blank — what does compute_accuracy() return for these inputs? Show your work.]
+index 0: interview == interview  ✓
+index 1: solo      == solo       ✓
+index 2: panel     != solo       ✗
+index 3: interview != narrative  ✗
+
+correct = 2, total = 4  ->  2 / 4 = 0.5
+compute_accuracy() returns 0.5
 ```
 
 ---
@@ -113,8 +122,11 @@ A `dict` keyed by label. Each value is a dict with three keys:
 **What does "correct" mean for a given class?**
 
 ```
-[blank — be precise. When does an episode count as correctly classified
- for the "interview" class, for example?]
+For class C, an episode counts as correct when its ground-truth label is C AND
+the prediction also equals C. (This is recall for class C.) Example: for
+"interview", correct = episodes whose true label is "interview" that were
+predicted "interview". We only look at episodes whose TRUTH is C — predicting
+"interview" for a truly-solo episode does NOT add to interview's "correct".
 ```
 
 ---
@@ -122,7 +134,10 @@ A `dict` keyed by label. Each value is a dict with three keys:
 **What does "total" mean for a given class?**
 
 ```
-[blank — is "total" the total number of predictions, or something more specific?]
+total = the number of episodes whose GROUND-TRUTH label is C — i.e. how many of
+this class actually exist in the test set. It is NOT the total number of
+predictions, and NOT the number of times we predicted C. This makes accuracy =
+correct/total a per-class recall.
 ```
 
 ---
@@ -130,12 +145,14 @@ A `dict` keyed by label. Each value is a dict with three keys:
 **Step-by-step logic:**
 
 ```
-[blank — describe the steps your code will take.
- 1. Initialize ...
- 2. Loop over ...
- 3. For each pair (predicted, truth) ...
- 4. After the loop ...
- 5. Return ...]
+1. Initialize a stats dict: for each label in VALID_LABELS,
+   {"correct": 0, "total": 0, "accuracy": 0.0}.
+2. Loop over the (predicted, truth) pairs with zip(predictions, ground_truth).
+3. For each pair: if truth is a valid label, increment stats[truth]["total"];
+   and if predicted == truth, also increment stats[truth]["correct"].
+4. After the loop, for each label compute accuracy = correct / total,
+   or 0.0 if total == 0.
+5. Return the stats dict keyed by label.
 ```
 
 ---
@@ -143,8 +160,9 @@ A `dict` keyed by label. Each value is a dict with three keys:
 **Edge case — what if a class has no examples in ground_truth (total == 0)?**
 
 ```
-[blank — what should accuracy be set to? Why?
- Hint: look at the docstring in evaluate.py.]
+Set accuracy to 0.0 (per the docstring in evaluate.py). With no examples there
+is no meaningful rate to report, and 0.0 avoids a divide-by-zero — it's a
+sentinel meaning "not measured", not a real 0% score.
 ```
 
 ---
@@ -155,14 +173,18 @@ A `dict` keyed by label. Each value is a dict with three keys:
 predictions  = ["interview", "interview", "solo", "panel", "panel"]
 ground_truth = ["interview", "solo",      "solo", "panel", "narrative"]
 
-[blank — fill in the per-class results table below]
+Walk through by truth label:
+- interview: truth at idx 0; pred 0 = interview ✓  -> correct 1, total 1
+- solo:      truth at idx 1,2; pred 1=interview ✗, pred 2=solo ✓ -> correct 1, total 2
+- panel:     truth at idx 3; pred 3 = panel ✓  -> correct 1, total 1
+- narrative: truth at idx 4; pred 4 = panel ✗  -> correct 0, total 1
 
 label       correct  total  accuracy
 ----------  -------  -----  --------
-interview   [blank]  [blank]  [blank]
-solo        [blank]  [blank]  [blank]
-panel       [blank]  [blank]  [blank]
-narrative   [blank]  [blank]  [blank]
+interview      1       1      1.00
+solo           1       2      0.50
+panel          1       1      1.00
+narrative      0       1      0.00
 ```
 
 ---
